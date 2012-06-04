@@ -10,6 +10,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
@@ -51,15 +52,22 @@ import com.googlecode.jmxtrans.model.JmxProcess;
 import com.googlecode.jmxtrans.model.Query;
 import com.googlecode.jmxtrans.model.Result;
 import com.googlecode.jmxtrans.model.Server;
+import com.sun.tools.attach.AgentInitializationException;
+import com.sun.tools.attach.AgentLoadException;
+import com.sun.tools.attach.VirtualMachine;
+import com.sun.tools.attach.VirtualMachineDescriptor;
 
 /**
  * The worker code.
- *
+ * 
  * @author jon
  */
 public class JmxUtils {
 
 	private static final Logger log = LoggerFactory.getLogger(JmxUtils.class);
+	
+	private static final String CONNECTOR_ADDRESS = "com.sun.management.jmxremote.localConnectorAddress";
+
 
 	/**
 	 * Merges two lists of servers (and their queries). Based on the equality of
@@ -343,7 +351,7 @@ public class JmxUtils {
 	 * connection.
 	 */
 	public static JMXConnector getServerConnection(Server server) throws Exception {
-		JMXServiceURL url = new JMXServiceURL(server.getUrl());
+		JMXServiceURL url = new JMXServiceURL(getServerUrl(server));
 
 		if (server.getProtocolProviderPackages() != null && server.getProtocolProviderPackages().contains("weblogic"))
 			return JMXConnectorFactory.connect(url, getWebLogicEnvironment(server));
@@ -351,6 +359,90 @@ public class JmxUtils {
 			return JMXConnectorFactory.connect(url, getEnvironment(server));
 
 	}
+
+	
+	private static String getServerUrl(final Server server) throws Exception {
+		
+		if (server.getComponentName() == null) {
+			return server.getUrl();
+		} else {
+			return getLocalJvmServerUrl(server);
+		}
+
+
+	}
+
+	/**
+	 * @param server
+	 * @return
+	 * @throws Exception
+	 * @throws IOException
+	 * @throws AgentLoadException
+	 * @throws AgentInitializationException
+	 */
+	private static String getLocalJvmServerUrl(final Server server) throws Exception, IOException, AgentLoadException, AgentInitializationException {
+		VirtualMachine vm = attachLocalVM(server);
+		try {
+			// get the connector address
+			String connectorAddress = vm.getAgentProperties().getProperty(CONNECTOR_ADDRESS);
+
+			// no connector address, so we start the JMX agent
+			if (connectorAddress == null) {
+				//start the JMX agent
+				startJmxAgent(vm);
+				// agent is started, get the connector address
+				connectorAddress = vm.getAgentProperties().getProperty(CONNECTOR_ADDRESS);
+			}
+
+			return connectorAddress;
+		} finally {
+			vm.detach();
+		}
+	}
+
+	/**
+	 * Attach the a local JVM having the property name componentName as defined in Server.
+	 * @param server
+	 * @return an attached VM or null if it doesn't find it.
+	 * @throws Exception
+	 */
+	private static VirtualMachine attachLocalVM(Server server) throws Exception {
+		VirtualMachine vm = null;
+		List<VirtualMachineDescriptor> list = VirtualMachine.list();
+
+		for (VirtualMachineDescriptor virtualMachineDescriptor : list) {
+	        vm = VirtualMachine.attach(virtualMachineDescriptor.id());
+	        Properties p = vm.getSystemProperties();
+	        
+	        String componentName = p.getProperty("componentName");
+	        
+	        if ((componentName != null) && (StringUtils.equals(componentName, server.getComponentName()))) {
+	        	//We found it
+	        	break;
+	        } else {
+	        	vm.detach();
+	        	vm=null;
+	        }
+		}
+		return vm;
+	}
+
+	/**
+	 * Start the JMX agent 
+	 * 
+	 * @param vm on wich we should start the JMX agent.
+	 * @throws IOException
+	 * @throws AgentLoadException
+	 * @throws AgentInitializationException
+	 */
+	private static void startJmxAgent(VirtualMachine vm) throws IOException, AgentLoadException, AgentInitializationException {
+		StringBuilder agent = new StringBuilder(vm.getSystemProperties().getProperty("java.home"));
+		agent.append(File.separator).append("lib").append(File.separator).append("management-agent.jar");
+		
+		vm.loadAgent(agent.toString());
+	}
+
+
 
 	/**
 	 * Generates the proper username/password environment for JMX connections.
@@ -508,12 +600,12 @@ public class JmxUtils {
 	 * Checks if the String contains only unicode digits. A decimal point is a
 	 * digit and returns true.
 	 * </p>
-	 *
+	 * 
 	 * <p>
 	 * <code>null</code> will return <code>false</code>. An empty String ("")
 	 * will return <code>true</code>.
 	 * </p>
-	 *
+	 * 
 	 * <pre>
 	 * StringUtils.isNumeric(null)   = false
 	 * StringUtils.isNumeric("")     = true
@@ -524,7 +616,7 @@ public class JmxUtils {
 	 * StringUtils.isNumeric("12-3") = false
 	 * StringUtils.isNumeric("12.3") = true
 	 * </pre>
-	 *
+	 * 
 	 * @param str
 	 *            the String to check, may be null
 	 * @return <code>true</code> if only contains digits, and is non-null
@@ -551,7 +643,7 @@ public class JmxUtils {
 	/**
 	 * Gets the object pool. TODO: Add options to adjust the pools, this will be
 	 * better performance on high load
-	 *
+	 * 
 	 * @param <T>
 	 *            the generic type
 	 * @param factory
@@ -571,7 +663,7 @@ public class JmxUtils {
 
 	/**
 	 * Helper method which returns a default PoolMap.
-	 *
+	 * 
 	 * TODO: allow for more configuration options?
 	 */
 	public static Map<String, KeyedObjectPool> getDefaultPoolMap() {
@@ -591,7 +683,7 @@ public class JmxUtils {
 
 	/**
 	 * Register the scheduler in the local MBeanServer.
-	 *
+	 * 
 	 * @param mbean
 	 *            the mbean
 	 * @throws Exception
@@ -604,7 +696,7 @@ public class JmxUtils {
 
 	/**
 	 * Unregister the scheduler from the local MBeanServer.
-	 *
+	 * 
 	 * @param mbean
 	 *            the mbean
 	 * @throws Exception
@@ -617,7 +709,7 @@ public class JmxUtils {
 
 	/**
 	 * Gets the key string.
-	 *
+	 * 
 	 * @param query
 	 *            the query
 	 * @param result
@@ -704,7 +796,7 @@ public class JmxUtils {
 
 	/**
 	 * Replaces all . with _ and removes all spaces and double/single quotes.
-	 *
+	 * 
 	 * @param name
 	 *            the name
 	 * @return the string
@@ -723,12 +815,12 @@ public class JmxUtils {
 	/**
 	 * Given a typeName string, get the first match from the typeNames setting.
 	 * In other words, suppose you have:
-	 *
+	 * 
 	 * typeName=name=PS Eden Space,type=MemoryPool
-	 *
+	 * 
 	 * If you addTypeName("name"), then it'll retrieve 'PS Eden Space' from the
 	 * string
-	 *
+	 * 
 	 * @param typeNames
 	 *            the type names
 	 * @param typeNameStr
@@ -754,12 +846,12 @@ public class JmxUtils {
 	/**
 	 * Given a typeName string, get the first match from the typeNames setting.
 	 * In other words, suppose you have:
-	 *
+	 * 
 	 * typeName=name=PS Eden Space,type=MemoryPool
-	 *
+	 * 
 	 * If you addTypeName("name"), then it'll retrieve 'PS Eden Space' from the
 	 * string
-	 *
+	 * 
 	 * @param query
 	 *            the query
 	 * @param typeNames

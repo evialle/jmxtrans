@@ -51,6 +51,8 @@ public class Server {
 	private String url;
 	private String cronExpression;
 	private Integer numQueryThreads;
+	/** Component name is used to retrieve a local JVM. */
+	private String componentName;
 
 	// if using local JMX to embed JmxTrans to query the local MBeanServer
 	private boolean local;
@@ -337,5 +339,19 @@ public class Server {
 	 */
 	public void setProtocolProviderPackages(String protocolProviderPackages) {
 		this.protocolProviderPackages = protocolProviderPackages;
+	}
+
+	/**
+	 * @return the componentName
+	 */
+	public String getComponentName() {
+		return componentName;
+	}
+
+	/**
+	 * @param componentName the componentName to set
+	 */
+	public void setComponentName(String componentName) {
+		this.componentName = componentName;
 	}
 }
